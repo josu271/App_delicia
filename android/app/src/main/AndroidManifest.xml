@@ -1,19 +1,20 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- PERMISOS: SOLO UNA VEZ, FUERA DE <application> -->
-    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
-    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
-    <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Permisos de ubicación -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
+    <uses-permission android:name="android.permission.INTERNET"/>
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
 
     <application
-        android:label="Delicia"
+        android:label="mobievent"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
 
-        <!-- API KEY: SIN ESPACIOS, DENTRO DE <application> -->
+        <!-- Aquí va la API KEY (DENTRO del application) -->
         <meta-data
             android:name="com.google.android.geo.API_KEY"
-            android:value="AIzaSyAXtdVLVebFjqi55QdbyztUfH7HkFu81FM" />
+            android:value="AIzaSyBIZrptkE0IGakPhzMzMpq4PaW_gw_D1vk"/>
 
         <activity
             android:name=".MainActivity"
@@ -25,6 +26,7 @@
             android:hardwareAccelerated="true"
             android:windowSoftInputMode="adjustResize">
 
+            <!-- Tema mientras carga Flutter -->
             <meta-data
                 android:name="io.flutter.embedding.android.NormalTheme"
                 android:resource="@style/NormalTheme" />
@@ -33,16 +35,16 @@
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
+
         </activity>
 
-        <!-- Flutter Embedding -->
+        <!-- Requerido por Flutter -->
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />
-
     </application>
 
-    <!-- Para ProcessTextPlugin (Flutter) -->
+    <!-- Required for Flutter text processing -->
     <queries>
         <intent>
             <action android:name="android.intent.action.PROCESS_TEXT"/>

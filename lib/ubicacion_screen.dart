@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
-import 'package:geolocator/geolocator.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:http/http.dart' as http;
 import 'package:url_launcher/url_launcher.dart';
@@ -27,37 +26,26 @@ class _UbicacionScreenState extends State<UbicacionScreen> {
 
   Set<Polyline> _polylines = {};
   Set<Marker> _markers = {};
+  Set<Circle> _circles = {};
   bool _isLoading = true;
-  StreamSubscription<Position>? _positionStream;
-  bool _isFollowingUser = false;
 
-  static const String _apiKey = 'AIzaSyAXtdVLVebFjqi55QdbyztUfH7HkFu81FM';
+  static const String _apiKey = 'TU_API_KEY_AQUI'; // Reemplaza con tu API Key real
 
   @override
   void initState() {
     super.initState();
-
-    // CARGAR DATOS + SIMULAR UBICACIÓN (SIN GPS)
     _cargarDatosPanaderia().then((_) {
       final simulacionUsuario = LatLng(-12.0595, -75.2140); // Cerca de la panadería
-
+      
       setState(() {
         _ubicacionActual = simulacionUsuario;
         _isLoading = false;
-        _distancia = "1.2 km";
-        _tiempo = "8 min";
-        _direccionActual = "Jr. Real 456, Huancayo";
       });
-
+      
       _actualizarMarcadores();
       _dibujarRutaSimulada(simulacionUsuario);
+      _obtenerDireccionDesdeCoordenadas(simulacionUsuario);
     });
-  }
-
-  @override
-  void dispose() {
-    _positionStream?.cancel();
-    super.dispose();
   }
 
   // CARGAR PANADERÍA DESDE FIRESTORE
@@ -85,14 +73,41 @@ class _UbicacionScreenState extends State<UbicacionScreen> {
     }
   }
 
-  // RUTA SIMULADA (SIN GPS)
+  // OBTENER DIRECCIÓN DESDE COORDENADAS
+  Future<void> _obtenerDireccionDesdeCoordenadas(LatLng coordenadas) async {
+    final url = Uri.parse(
+      'https://maps.googleapis.com/maps/api/geocode/json?'
+      'latlng=${coordenadas.latitude},${coordenadas.longitude}'
+      '&key=$_apiKey&language=es',
+    );
+
+    try {
+      final response = await http.get(url);
+      if (response.statusCode == 200 && mounted) {
+        final data = json.decode(response.body);
+        if (data['results'].isNotEmpty) {
+          final direccion = data['results'][0]['formatted_address'];
+          setState(() {
+            _direccionActual = direccion;
+          });
+        }
+      }
+    } catch (e) {
+      debugPrint("Error obteniendo dirección: $e");
+      setState(() {
+        _direccionActual = "Ubicación cercana a la panadería";
+      });
+    }
+  }
+
+  // RUTA SIMULADA
   Future<void> _dibujarRutaSimulada(LatLng origen) async {
     final destino = _ubicacionPanaderia;
     final url = Uri.parse(
       'https://maps.googleapis.com/maps/api/directions/json?'
-          'origin=${origen.latitude},${origen.longitude}'
-          '&destination=${destino.latitude},${destino.longitude}'
-          '&key=$_apiKey&mode=driving',
+      'origin=${origen.latitude},${origen.longitude}'
+      '&destination=${destino.latitude},${destino.longitude}'
+      '&key=$_apiKey&mode=driving&language=es',
     );
 
     try {
@@ -110,18 +125,39 @@ class _UbicacionScreenState extends State<UbicacionScreen> {
             _tiempo = leg['duration']['text'];
             _polylines = {
               Polyline(
-                polylineId: const PolylineId('ruta_simulada'),
+                polylineId: const PolylineId('ruta_principal'),
                 color: Colors.blue,
-                width: 6,
+                width: 5,
                 points: polylinePoints,
+                startCap: Cap.roundCap,
+                endCap: Cap.roundCap,
               ),
             };
           });
           _actualizarMarcadores();
+          
+          // Agregar círculo para mostrar radio de aproximación
+          setState(() {
+            _circles = {
+              Circle(
+                circleId: const CircleId('area_panaderia'),
+                center: _ubicacionPanaderia,
+                radius: 50, // 50 metros
+                fillColor: Colors.green.withOpacity(0.2),
+                strokeColor: Colors.green,
+                strokeWidth: 2,
+              ),
+            };
+          });
         }
       }
     } catch (e) {
       debugPrint("Error simulación: $e");
+      // Usar distancia estimada como fallback
+      setState(() {
+        _distancia = "1.2 km aprox.";
+        _tiempo = "8 min aprox.";
+      });
     }
   }
 
@@ -137,15 +173,19 @@ class _UbicacionScreenState extends State<UbicacionScreen> {
           infoWindow: InfoWindow(
             title: _nombrePanaderia,
             snippet: _direccionPanaderia,
+            onTap: () {
+              _abrirRutaEnGoogleMaps();
+            },
           ),
           icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueOrange),
+          consumeTapEvents: true,
         ),
         if (_ubicacionActual != null)
           Marker(
             markerId: const MarkerId('usuario'),
             position: _ubicacionActual!,
             infoWindow: InfoWindow(
-              title: 'Tú estás aquí',
+              title: 'Tu ubicación',
               snippet: '$_distancia • $_tiempo',
             ),
             icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueAzure),
@@ -154,7 +194,7 @@ class _UbicacionScreenState extends State<UbicacionScreen> {
     });
   }
 
-  // DECODIFICAR POLYLINE
+  // DECODIFICAR POLYLINE (método existente)
   List<LatLng> _decodePoly(String encoded) {
     List<LatLng> points = [];
     int index = 0, len = encoded.length;
@@ -215,90 +255,110 @@ class _UbicacionScreenState extends State<UbicacionScreen> {
     }
   }
 
+  // CENTRAR MAPA EN LA RUTA
+  Future<void> _centrarMapaEnRuta() async {
+    if (_ubicacionActual == null) return;
+    
+    final controller = await _controller.future;
+    
+    // Calcular bounds para incluir ambos puntos
+    final bounds = LatLngBounds(
+      southwest: LatLng(
+        _ubicacionActual!.latitude < _ubicacionPanaderia.latitude 
+          ? _ubicacionActual!.latitude 
+          : _ubicacionPanaderia.latitude,
+        _ubicacionActual!.longitude < _ubicacionPanaderia.longitude 
+          ? _ubicacionActual!.longitude 
+          : _ubicacionPanaderia.longitude,
+      ),
+      northeast: LatLng(
+        _ubicacionActual!.latitude > _ubicacionPanaderia.latitude 
+          ? _ubicacionActual!.latitude 
+          : _ubicacionPanaderia.latitude,
+        _ubicacionActual!.longitude > _ubicacionPanaderia.longitude 
+          ? _ubicacionActual!.longitude 
+          : _ubicacionPanaderia.longitude,
+      ),
+    );
+
+    await controller.animateCamera(
+      CameraUpdate.newLatLngBounds(bounds, 100),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.orange[50],
       appBar: AppBar(
-        title: const Text('GPS a Panadería', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+        title: const Text('Ubicación de Panadería', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
         backgroundColor: Colors.orange,
         centerTitle: true,
         elevation: 0,
+        actions: [
+          IconButton(
+            onPressed: _centrarMapaEnRuta,
+            icon: const Icon(Icons.center_focus_strong, color: Colors.white),
+            tooltip: 'Centrar en ruta',
+          ),
+        ],
       ),
       body: Stack(
         children: [
-          // MAPA DE PREVIA (SIEMPRE VISIBLE)
+          // GOOGLE MAPS
           GoogleMap(
             mapType: MapType.normal,
-            myLocationEnabled: false, // DESACTIVADO (sin GPS)
+            myLocationEnabled: false,
             myLocationButtonEnabled: false,
-            zoomControlsEnabled: false,
+            zoomControlsEnabled: true,
+            zoomGesturesEnabled: true,
             compassEnabled: true,
+            rotateGesturesEnabled: true,
+            scrollGesturesEnabled: true,
+            tiltGesturesEnabled: true,
             markers: _markers,
             polylines: _polylines,
+            circles: _circles,
             initialCameraPosition: CameraPosition(
               target: _ubicacionPanaderia,
               zoom: 16,
+              tilt: 45,
+              bearing: 30,
             ),
             onMapCreated: (controller) {
               _controller.complete(controller);
             },
           ),
 
-          // LOADER SOLO AL INICIO
+          // LOADER
           if (_isLoading)
             Container(
-              color: Colors.grey[100]!.withOpacity(0.95),
-              child: Center(
+              color: Colors.white.withOpacity(0.9),
+              child: const Center(
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    const CircularProgressIndicator(color: Colors.orange),
-                    const SizedBox(height: 16),
+                    CircularProgressIndicator(color: Colors.orange),
+                    SizedBox(height: 16),
                     Text(
                       'Cargando mapa...',
-                      style: TextStyle(color: Colors.brown[700], fontSize: 16, fontWeight: FontWeight.w600),
+                      style: TextStyle(color: Colors.brown, fontSize: 16, fontWeight: FontWeight.w600),
                     ),
                   ],
                 ),
               ),
             ),
 
-          // BOTÓN GPS (COMENTADO)
-          /*
-          Positioned(
-            top: 16,
-            right: 16,
-            child: FloatingActionButton(
-              heroTag: "gps_button",
-              backgroundColor: _isFollowingUser ? Colors.blue : Colors.white,
-              elevation: 6,
-              mini: true,
-              onPressed: () {
-                if (_isFollowingUser) {
-                  _detenerSeguimiento();
-                } else {
-                  _seguirUsuario();
-                }
-              },
-              child: Icon(
-                _isFollowingUser ? Icons.gps_fixed : Icons.gps_not_fixed,
-                color: _isFollowingUser ? Colors.white : Colors.blue,
-              ),
-            ),
-          ),
-          */
-
           // BOTÓN DIRECCIONES
           Positioned(
             bottom: 160,
             right: 16,
             child: FloatingActionButton(
-              heroTag: "go",
+              heroTag: "direcciones",
               backgroundColor: Colors.orange,
-              elevation: 6,
+              elevation: 8,
               onPressed: _abrirRutaEnGoogleMaps,
-              child: const Icon(Icons.directions, color: Colors.white),
+              child: const Icon(Icons.directions, color: Colors.white, size: 28),
             ),
           ),
 
@@ -309,12 +369,19 @@ class _UbicacionScreenState extends State<UbicacionScreen> {
             right: 0,
             child: Container(
               padding: const EdgeInsets.all(16),
-              decoration: const BoxDecoration(
+              decoration: BoxDecoration(
                 color: Colors.white,
-                borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-                boxShadow: [BoxShadow(color: Colors.black12, blurRadius: 10)],
+                borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withOpacity(0.1),
+                    blurRadius: 15,
+                    spreadRadius: 2,
+                  )
+                ],
               ),
               child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Row(
@@ -323,24 +390,81 @@ class _UbicacionScreenState extends State<UbicacionScreen> {
                       Flexible(
                         child: Text(
                           _nombrePanaderia,
-                          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                          style: const TextStyle(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 18,
+                            color: Colors.brown,
+                          ),
                           overflow: TextOverflow.ellipsis,
                         ),
                       ),
-                      Text(
-                        '$_distancia • $_tiempo',
-                        style: const TextStyle(color: Colors.green, fontWeight: FontWeight.w600),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                        decoration: BoxDecoration(
+                          color: Colors.green[50],
+                          borderRadius: BorderRadius.circular(20),
+                          border: Border.all(color: Colors.green),
+                        ),
+                        child: Text(
+                          '$_distancia • $_tiempo',
+                          style: TextStyle(
+                            color: Colors.green[800],
+                            fontWeight: FontWeight.w600,
+                            fontSize: 12,
+                          ),
+                        ),
                       ),
                     ],
                   ),
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      const Icon(Icons.location_on, size: 16, color: Colors.grey),
+                      const SizedBox(width: 4),
+                      Expanded(
+                        child: Text(
+                          _direccionPanaderia,
+                          style: const TextStyle(color: Colors.grey, fontSize: 14),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const Divider(height: 20, thickness: 1),
+                  const Text(
+                    'Tu ubicación actual:',
+                    style: TextStyle(fontWeight: FontWeight.w600, color: Colors.brown),
+                  ),
                   const SizedBox(height: 4),
-                  Text(_direccionPanaderia, style: const TextStyle(color: Colors.brown)),
-                  const Divider(height: 20),
-                  const Text('Tu ubicación actual:', style: TextStyle(fontWeight: FontWeight.w600)),
-                  Text(
-                    _direccionActual,
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(fontStyle: FontStyle.italic, color: Colors.grey),
+                  Row(
+                    children: [
+                      const Icon(Icons.my_location, size: 16, color: Colors.blue),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          _direccionActual,
+                          style: const TextStyle(fontStyle: FontStyle.italic, color: Colors.grey),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton.icon(
+                      onPressed: _abrirRutaEnGoogleMaps,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.orange,
+                        foregroundColor: Colors.white,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                      ),
+                      icon: const Icon(Icons.directions),
+                      label: const Text('Abrir en Google Maps', style: TextStyle(fontWeight: FontWeight.bold)),
+                    ),
                   ),
                 ],
               ),
